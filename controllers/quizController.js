@@ -1,211 +1,147 @@
+const QuizAttempt = require('../models/QuizAttempt');
 const Quiz = require('../models/Quiz');
-const { uploadToCloudinary, deleteFromCloudinary } = require('../config/cloudinary');
+const mongoose = require('mongoose');
 
-// Get all quizzes with search and pagination
-exports.getAllQuizzes = async (req, res) => {
+// Submit quiz attempt
+exports.submitQuizAttempt = async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const search = req.query.search || '';
-    
-    let query = {};
-    if (search) {
-      query = {
-        $or: [
-          { title: { $regex: search, $options: 'i' } },
-          { description: { $regex: search, $options: 'i' } }
-        ]
-      };
-    }
-    
-    const total = await Quiz.countDocuments(query);
-    const totalPages = Math.ceil(total / limit);
-    
-    const quizzes = await Quiz.find(query)
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(limit);
+    const { user, quiz: quizId, score, answers } = req.body;
 
-    res.json({
-      data: quizzes,
-      page,
-      totalPages,
-      total,
-      limit
-    });
-  } catch (error) {
-    console.error('Error in getAllQuizzes:', error);
-    res.status(500).json({ message: error.message });
-  }
-};
-
-// Get quiz by ID
-exports.getQuizById = async (req, res) => {
-  try {
-    const quiz = await Quiz.findById(req.params.id);
+    // Dapatkan data quiz untuk mendapatkan teks pertanyaan dan jawaban
+    const quiz = await Quiz.findById(quizId);
     if (!quiz) {
       return res.status(404).json({ message: 'Quiz tidak ditemukan' });
     }
-    res.json(quiz);
-  } catch (error) {
-    console.error('Error in getQuizById:', error);
-    res.status(500).json({ message: error.message });
-  }
-};
 
-// Create new quiz
-exports.createQuiz = async (req, res) => {
-  try {
-    console.log('Request Body:', req.body);
-    console.log('Files:', req.files);
+    // Transformasi jawaban untuk menyimpan teks pertanyaan dan jawaban
+    const formattedAnswers = answers.map(answer => {
+      // Temukan pertanyaan berdasarkan ID
+      const question = quiz.questions.find(q => q._id.toString() === answer.question);
 
-    const { title, description, questions } = req.body;
-    
-    let parsedQuestions;
-    try {
-      parsedQuestions = JSON.parse(questions);
-    } catch (error) {
-      console.error('Error parsing questions:', error);
-      return res.status(400).json({ message: 'Invalid questions format' });
-    }
+      // Temukan opsi yang dipilih
+      const selectedOption = question?.options.find(opt => opt._id.toString() === answer.selectedOption);
 
-    // Upload images ke Cloudinary
-    for (let i = 0; i < parsedQuestions.length; i++) {
-      const fileKey = `image_${i}`;
-      if (req.files && req.files[fileKey]) {
-        const file = req.files[fileKey][0];
-        console.log(`Processing file for question ${i}:`, file.originalname);
-
-        try {
-          const uploadResult = await uploadToCloudinary(file);
-          console.log(`Upload result for question ${i}:`, uploadResult);
-
-          parsedQuestions[i].image = {
-            url: uploadResult.url,
-            public_id: uploadResult.public_id,
-            size: file.size
-          };
-        } catch (uploadError) {
-          console.error(`Error uploading image for question ${i}:`, uploadError);
-          // Continue with other questions even if one upload fails
-        }
-      }
-    }
-
-    // Create quiz instance
-    const quiz = new Quiz({
-      title,
-      description,
-      questions: parsedQuestions
+      return {
+        question: {
+          id: answer.question,
+          text: question ? question.text : 'Pertanyaan tidak ditemukan'
+        },
+        selectedOption: {
+          id: answer.selectedOption,
+          text: selectedOption ? selectedOption.text : 'Opsi tidak ditemukan'
+        },
+        isCorrect: answer.isCorrect
+      };
     });
 
-    const savedQuiz = await quiz.save();
-    res.status(201).json(savedQuiz);
+    const quizAttempt = new QuizAttempt({
+      user,
+      quiz: quizId,
+      score,
+      answers: formattedAnswers
+    });
+
+    const savedAttempt = await quizAttempt.save();
+    res.status(201).json(savedAttempt);
   } catch (error) {
-    console.error('Create quiz error:', error);
+    console.error('Error in submitQuizAttempt:', error);
     res.status(500).json({ message: error.message });
   }
 };
 
-// Update existing quiz
-exports.updateQuiz = async (req, res) => {
+// Get user's quiz attempts
+exports.getUserQuizAttempts = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const attempts = await QuizAttempt.find({ user: userId })
+      .populate('quiz', 'title')
+      .sort({ completedAt: -1 });
+    res.json(attempts);
+  } catch (error) {
+    console.error('Error in getUserQuizAttempts:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get specific quiz attempt
+exports.getQuizAttempt = async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, description, questions } = req.body;
-    
-    let parsedQuestions;
-    try {
-      parsedQuestions = JSON.parse(questions);
-    } catch (error) {
-      console.error('Error parsing questions:', error);
-      return res.status(400).json({ message: 'Invalid questions format' });
+    const attempt = await QuizAttempt.findById(id)
+      .populate('quiz')
+      .populate('user', 'username');
+
+    if (!attempt) {
+      return res.status(404).json({ message: 'Quiz attempt not found' });
     }
 
-    const existingQuiz = await Quiz.findById(id);
-    if (!existingQuiz) {
-      return res.status(404).json({ message: 'Quiz tidak ditemukan' });
-    }
-
-    // Process each question
-    for (let i = 0; i < parsedQuestions.length; i++) {
-      const fileKey = `image_${i}`;
-      
-      // If there's a new file to upload
-      if (req.files && req.files[fileKey]) {
-        const file = req.files[fileKey][0];
-        console.log(`Processing new file for question ${i}:`, file.originalname);
-
-        // Delete old image if exists
-        if (existingQuiz.questions[i]?.image?.public_id) {
-          try {
-            await deleteFromCloudinary(existingQuiz.questions[i].image.public_id);
-          } catch (deleteError) {
-            console.error(`Error deleting old image for question ${i}:`, deleteError);
-          }
-        }
-
-        // Upload new image
-        try {
-          const uploadResult = await uploadToCloudinary(file);
-          console.log(`Upload result for question ${i}:`, uploadResult);
-
-          parsedQuestions[i].image = {
-            url: uploadResult.url,
-            public_id: uploadResult.public_id,
-            size: file.size
-          };
-        } catch (uploadError) {
-          console.error(`Error uploading new image for question ${i}:`, uploadError);
-          parsedQuestions[i].image = null; // Reset image if upload fails
-        }
-      } else if (existingQuiz.questions[i]?.image) {
-        // Keep existing image if no new file is uploaded
-        parsedQuestions[i].image = existingQuiz.questions[i].image;
-      }
-    }
-
-    const updatedQuiz = await Quiz.findByIdAndUpdate(
-      id,
-      {
-        title,
-        description,
-        questions: parsedQuestions,
-        updatedAt: Date.now()
-      },
-      { new: true }
-    );
-
-    res.json(updatedQuiz);
+    res.json(attempt);
   } catch (error) {
-    console.error('Update quiz error:', error);
+    console.error('Error in getQuizAttempt:', error);
     res.status(500).json({ message: error.message });
   }
 };
 
-// Delete quiz
-exports.deleteQuiz = async (req, res) => {
+// Get latest attempts
+exports.getLatestAttempts = async (req, res) => {
   try {
-    const quiz = await Quiz.findById(req.params.id);
-    if (!quiz) {
-      return res.status(404).json({ message: 'Quiz tidak ditemukan' });
+    const userId = req.user.id;
+    console.log('Getting attempts for user:', userId);
+
+    // Validate userId
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid user ID format'
+      });
     }
 
-    // Delete all associated images from Cloudinary
-    for (const question of quiz.questions) {
-      if (question.image?.public_id) {
+    // Get attempts without populate first
+    const attempts = await QuizAttempt.find({ user: userId })
+      .sort({ completedAt: -1 })
+      .limit(3)
+      .lean();
+
+    console.log('Raw attempts found:', attempts.length);
+
+    // Process attempts one by one with proper error handling
+    const validAttempts = [];
+
+    for (const attempt of attempts) {
+      let attemptData = {
+        score: attempt.score,
+        date: attempt.completedAt,
+        quizTitle: 'Quiz telah dihapus'
+      };
+
+      // Only try to get quiz title if we have a valid quiz ID
+      if (attempt.quiz && mongoose.Types.ObjectId.isValid(attempt.quiz)) {
         try {
-          await deleteFromCloudinary(question.image.public_id);
-        } catch (error) {
-          console.error('Error deleting image:', error);
-          // Continue with deletion even if image deletion fails
+          const quiz = await Quiz.findById(attempt.quiz).select('title').lean();
+          if (quiz && quiz.title) {
+            attemptData.quizTitle = quiz.title;
+          }
+        } catch (err) {
+          console.error('Error fetching quiz title:', err);
+          // Keep default title on error
         }
       }
+
+      validAttempts.push(attemptData);
     }
 
-    await Quiz.findByIdAndDelete(req.params.id);
-    res.json({ message: 'Quiz berhasil dihapus' });
+    console.log('Processed attempts:', validAttempts);
+
+    res.json({
+      success: true,
+      attempts: validAttempts
+    });
   } catch (error) {
-    console.error('Delete quiz error:', error);
-    res.status(500).json({ message: error.message });
+    console.error('Error in getLatestAttempts:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message,
+      details: error.stack
+    });
   }
 };
