@@ -63,6 +63,29 @@ exports.getUserQuizAttempts = async (req, res) => {
   }
 };
 
+// Get attempts by quiz ID
+exports.getAttemptsByQuizId = async (req, res) => {
+  try {
+    const { quizId } = req.params;
+
+    // Validasi quizId
+    if (!mongoose.Types.ObjectId.isValid(quizId)) {
+      return res.status(400).json({
+        message: 'Invalid quiz ID format'
+      });
+    }
+
+    const attempts = await QuizAttempt.find({ quiz: quizId })
+      .populate('user', 'username')
+      .sort({ completedAt: -1 });
+
+    res.json(attempts);
+  } catch (error) {
+    console.error('Error in getAttemptsByQuizId:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
 // Get specific quiz attempt
 exports.getQuizAttempt = async (req, res) => {
   try {

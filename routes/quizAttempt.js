@@ -9,6 +9,9 @@ router.post('/submit', quizAttemptController.submitQuizAttempt);
 // Get user's quiz attempts
 router.get('/user/:userId', quizAttemptController.getUserQuizAttempts);
 
+// Get quiz attempts by quiz ID
+router.get('/quiz/:quizId', quizAttemptController.getAttemptsByQuizId);
+
 // Get specific quiz attempt
 router.get('/latest', auth, quizAttemptController.getLatestAttempts);
 router.get('/:id', quizAttemptController.getQuizAttempt);
