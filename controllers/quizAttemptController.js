@@ -5,17 +5,40 @@ const mongoose = require('mongoose');
 // Submit quiz attempt
 exports.submitQuizAttempt = async (req, res) => {
   try {
-    const { user, quiz, score, answers } = req.body;
+    const { user, quiz: quizId, score, answers } = req.body;
+
+    // Dapatkan data quiz untuk mendapatkan teks pertanyaan dan jawaban
+    const quiz = await Quiz.findById(quizId);
+    if (!quiz) {
+      return res.status(404).json({ message: 'Quiz tidak ditemukan' });
+    }
+
+    // Transformasi jawaban untuk menyimpan teks pertanyaan dan jawaban
+    const formattedAnswers = answers.map(answer => {
+      // Temukan pertanyaan berdasarkan ID
+      const question = quiz.questions.find(q => q._id.toString() === answer.question);
+
+      // Temukan opsi yang dipilih
+      const selectedOption = question?.options.find(opt => opt._id.toString() === answer.selectedOption);
+
+      return {
+        question: {
+          id: answer.question,
+          text: question ? question.text : 'Pertanyaan tidak ditemukan'
+        },
+        selectedOption: {
+          id: answer.selectedOption,
+          text: selectedOption ? selectedOption.text : 'Opsi tidak ditemukan'
+        },
+        isCorrect: answer.isCorrect
+      };
+    });
 
     const quizAttempt = new QuizAttempt({
       user,
-      quiz,
+      quiz: quizId,
       score,
-      answers: answers.map(answer => ({
-        question: answer.question,
-        selectedOption: answer.selectedOption,
-        isCorrect: answer.isCorrect
-      }))
+      answers: formattedAnswers
     });
 
     const savedAttempt = await quizAttempt.save();
@@ -47,11 +70,11 @@ exports.getQuizAttempt = async (req, res) => {
     const attempt = await QuizAttempt.findById(id)
       .populate('quiz')
       .populate('user', 'username');
-    
+
     if (!attempt) {
       return res.status(404).json({ message: 'Quiz attempt not found' });
     }
-    
+
     res.json(attempt);
   } catch (error) {
     console.error('Error in getQuizAttempt:', error);
@@ -72,18 +95,18 @@ exports.getLatestAttempts = async (req, res) => {
         message: 'Invalid user ID format'
       });
     }
-    
+
     // Get attempts without populate first
     const attempts = await QuizAttempt.find({ user: userId })
       .sort({ completedAt: -1 })
       .limit(3)
       .lean();
-      
+
     console.log('Raw attempts found:', attempts.length);
 
     // Process attempts one by one with proper error handling
     const validAttempts = [];
-    
+
     for (const attempt of attempts) {
       let attemptData = {
         score: attempt.score,
@@ -115,7 +138,7 @@ exports.getLatestAttempts = async (req, res) => {
     });
   } catch (error) {
     console.error('Error in getLatestAttempts:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       message: error.message,
       details: error.stack
